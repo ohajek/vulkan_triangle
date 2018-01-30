@@ -40,6 +40,17 @@ const std::vector<const char*> validationLayers = {
 	"VK_LAYER_LUNARG_standard_validation"
 };
 
+/*
+Struktura pro ulozeni indexu jednotlivych queue families.
+isComplete overi, jestli jsou pritomny vsechny hledane families
+*/
+struct QueueFamilyIndices {
+	int graphicsFamily = -1;
+
+	bool isComplete() {
+		return graphicsFamily >= 0;
+	}
+};
 
 
 class HelloTriangleApplication {
@@ -64,6 +75,7 @@ private:
 	void initVulkan() {
 		createInstance();
 		setupDebugCallback();
+		selectPhysicalDevice();
 	}
 
 	void mainLoop() {
@@ -75,15 +87,13 @@ private:
 	}
 
 	void cleanup() {
-		DestroyDebugReportCallbackEXT(m_instance, m_debug_callback, nullptr);
+		DestroyDebugReportCallbackEXT(m_instance, m_debugCallback, nullptr);
 		vkDestroyInstance(m_instance, nullptr);
 
 		glfwDestroyWindow(m_window);
 
 		glfwTerminate();
 	}
-
-
 
 	void createInstance() {
 		/*
@@ -198,7 +208,7 @@ private:
 		Protoze je debug callback je specificky pro Vulkan instanci a jejim vrstvam,
 		je potreba ji zadat jako prvni
 		*/
-		if (CreateDebugReportCallbackEXT(m_instance, &createInfo, nullptr, &m_debug_callback) != VK_SUCCESS) {
+		if (CreateDebugReportCallbackEXT(m_instance, &createInfo, nullptr, &m_debugCallback) != VK_SUCCESS) {
 			throw std::runtime_error("ERROR:Failed to set up debug callback!");
 		}
 	}
@@ -221,7 +231,7 @@ private:
 		uint64_t obj,
 		size_t location,
 		int32_t code,
-		const char* layerPrefix,
+		const char* layer_prefix,
 		const char* msg,
 		void* userData) {
 
@@ -249,10 +259,84 @@ private:
 		return extensions;
 	}
 
-	GLFWwindow* m_window;
-	VkInstance m_instance;
-	VkDebugReportCallbackEXT m_debug_callback;
+	void selectPhysicalDevice() {
+		uint32_t deviceCount = 0;
+		vkEnumeratePhysicalDevices(m_instance, &deviceCount, nullptr);
+
+		if (deviceCount == 0) {
+			throw std::runtime_error("ERROR:Failed to find physical devices with Vulkan support!");
+		}
+
+		std::vector<VkPhysicalDevice> devices(deviceCount);
+		vkEnumeratePhysicalDevices(m_instance, &deviceCount, devices.data());
+
+		for (const auto &device : devices) {
+			if (isDeviceSuitable(device)) {
+				m_physicalDevice = device;
+				break;
+			}
+		}
+
+		if (m_physicalDevice == VK_NULL_HANDLE) {
+			throw std::runtime_error("ERROR:Failed to find suitable physical device!");
+		}
+	}
+
+	/*
+	Vyhledani vhodneho zarizeni: 
+		diskretni gpu
+		podpora pro zadane queue families
+	*/
+	bool isDeviceSuitable(const VkPhysicalDevice& device) {
+		//Name, version and Vulkan support
+		VkPhysicalDeviceProperties deviceProperties;
+		//Optional support: 64bit floats, texture compression, multi-viewport rendering
+		VkPhysicalDeviceFeatures deviceFeatures;
+
+		vkGetPhysicalDeviceProperties(device, &deviceProperties);
+		vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
+		
+		QueueFamilyIndices indices = findQueueFamilies(device);
+
+		return (deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && indices.isComplete());
+	}
+
+	/*
+	Vyhledani veskerych Queue families, ktere device podporuje: compute, graphics apod.
+	*/
+	QueueFamilyIndices findQueueFamilies(const VkPhysicalDevice& device) {
+		QueueFamilyIndices indices;
+		uint32_t queueFamilyCount = 0;
+		vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
+
+		std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+		vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
+
+		/*
+		Do indices se ulozi indexy jednotlivych hledanych queues
+		*/
+		int i = 0;
+		for (const auto& queueFamily : queueFamilies) {
+			if (queueFamily.queueCount > 0 && queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+				indices.graphicsFamily = i;
+			}
+
+			if (indices.isComplete()) {
+				break;
+			}
+			i++;
+		}
+
+
+		return indices;
+	}
+
+	GLFWwindow*					m_window;
+	VkInstance					m_instance;
+	VkDebugReportCallbackEXT	m_debugCallback;
+	VkPhysicalDevice			m_physicalDevice = VK_NULL_HANDLE; //Implicitne znicen pri niceni instance -> neni potreba uvolnit
 };
+
 
 int main(int argc, char* argv[]) {
 	HelloTriangleApplication app;
