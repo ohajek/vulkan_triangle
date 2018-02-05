@@ -140,18 +140,30 @@ private:
 		createImageViews();
 		createRenderPass();
 		createGraphicsPipeline();
+		createFramebuffers();
+		createCommandPool();
+		createCommandBuffers();
+		createSemaphores();
 	}
 
 	void mainLoop() {
 		while (!glfwWindowShouldClose(m_window)) {
 			glfwPollEvents();
-
-			//glfwSwapBuffers(m_window);
+			drawFrame();
 		}
+
+		vkDeviceWaitIdle(m_logicalDevice);
 	}
 
 	void cleanup() {
 		//Vulkan cleanup
+		vkDestroySemaphore(m_logicalDevice, m_imageAvailableSemaphore, nullptr);
+		vkDestroySemaphore(m_logicalDevice, m_renderFinishedSemaphore, nullptr);
+		vkDestroyCommandPool(m_logicalDevice, m_commandPool, nullptr);
+		for (VkFramebuffer framebuffer : m_swapchainFramebuffers) {
+			vkDestroyFramebuffer(m_logicalDevice, framebuffer, nullptr);
+		}
+		vkDestroyPipeline(m_logicalDevice, m_graphicsPipeline, nullptr);
 		vkDestroyPipelineLayout(m_logicalDevice, m_pipelineLayout, nullptr);
 		vkDestroyRenderPass(m_logicalDevice, m_renderPass, nullptr);
 		for (auto imageview : m_swapchainImageViews) {
@@ -761,16 +773,50 @@ private:
 		subpass.colorAttachmentCount = 1;
 		subpass.pColorAttachments = &colorAttachmentRef;
 
+		/*
+		Subpass dependencies
+		We could change the waitStages for the imageAvailableSemaphore to VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+		to ensure that the render passes don't begin until the image is available
+		or this...
+		*/
+		VkSubpassDependency dependency = {};
+		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependency.dstSubpass = 0;
+		dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependency.srcAccessMask = 0;
+		dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
 		VkRenderPassCreateInfo createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
 		createInfo.attachmentCount = 1;
 		createInfo.pAttachments = &colorAttachment;
 		createInfo.subpassCount = 1;
 		createInfo.pSubpasses = &subpass;
+		createInfo.dependencyCount = 1;
+		createInfo.pDependencies = &dependency;
 
 		if (vkCreateRenderPass(m_logicalDevice, &createInfo, nullptr, &m_renderPass) != VK_SUCCESS) {
 			throw std::runtime_error("ERROR: Failed to create render pass!");
 		}
+	}
+
+	/*
+	Creates a shader module which sort of works like a shader bytecode wrapper
+	*/
+	VkShaderModule createShaderModule(const std::vector<char>& code) {
+		VkShaderModuleCreateInfo createInfo = {};
+		
+		createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+		createInfo.codeSize = code.size();
+		createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+
+		VkShaderModule shaderModule;
+		if (vkCreateShaderModule(m_logicalDevice, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+			throw std::runtime_error("ERROR: Failed to create shader module!");
+		}
+
+		return shaderModule;
 	}
 
 	void createGraphicsPipeline() {
@@ -863,9 +909,6 @@ private:
 		rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
 		rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
 		rasterizer.depthBiasEnable = VK_FALSE;
-		rasterizer.depthBiasConstantFactor = 0.0f; // Optional
-		rasterizer.depthBiasClamp = 0.0f; // Optional
-		rasterizer.depthBiasSlopeFactor = 0.0f; // Optional
 
 		/*
 		Multisampling settings
@@ -874,10 +917,6 @@ private:
 		multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
 		multisampling.sampleShadingEnable = VK_FALSE;
 		multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-		multisampling.minSampleShading = 1.0f; // Optional
-		multisampling.pSampleMask = nullptr; // Optional
-		multisampling.alphaToCoverageEnable = VK_FALSE; // Optional
-		multisampling.alphaToOneEnable = VK_FALSE; // Optional
 
 		/*
 		Depth and stencil configuration
@@ -928,6 +967,26 @@ private:
 			throw std::runtime_error("ERROR: Failed to create pipeline layout!");
 		}
 
+
+		VkGraphicsPipelineCreateInfo pipelineCreateInfo = {};
+		pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+		pipelineCreateInfo.stageCount = 2;
+		pipelineCreateInfo.pStages = shaderStages;
+		pipelineCreateInfo.pVertexInputState = &vertexInputInfo;
+		pipelineCreateInfo.pInputAssemblyState = &inputAssembly;
+		pipelineCreateInfo.pViewportState = &viewportState;
+		pipelineCreateInfo.pRasterizationState = &rasterizer;
+		pipelineCreateInfo.pMultisampleState = &multisampling;
+		pipelineCreateInfo.pColorBlendState = &colorBlending;
+		pipelineCreateInfo.layout = m_pipelineLayout;
+		pipelineCreateInfo.renderPass = m_renderPass;
+		pipelineCreateInfo.subpass = 0;
+		pipelineCreateInfo.basePipelineHandle = VK_NULL_HANDLE; //Handle for derived pipeline
+		pipelineCreateInfo.basePipelineIndex = -1;
+
+		if (vkCreateGraphicsPipelines(m_logicalDevice, VK_NULL_HANDLE, 1, &pipelineCreateInfo, nullptr, &m_graphicsPipeline) != VK_SUCCESS) {
+			throw std::runtime_error("ERROR: Failed to create graphics pipeline!");
+		}
 		/*
 		Cleanup of the "bytecode wrappers"
 		*/
@@ -936,42 +995,193 @@ private:
 	}
 
 	/*
-	Creates a shader module which sort of works like a shader bytecode wrapper
+	Create framebuffers for all imageviews compatible with renderpass
 	*/
-	VkShaderModule createShaderModule(const std::vector<char>& code) {
-		VkShaderModuleCreateInfo createInfo = {};
+	void createFramebuffers() {
+		m_swapchainFramebuffers.resize(m_swapchainImageViews.size());
 		
-		createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-		createInfo.codeSize = code.size();
-		createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+		for (size_t i = 0; i < m_swapchainImageViews.size(); i++) {
+			VkImageView attachments[]{ m_swapchainImageViews[i] };
 
-		VkShaderModule shaderModule;
-		if (vkCreateShaderModule(m_logicalDevice, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-			throw std::runtime_error("ERROR: Failed to create shader module!");
+			VkFramebufferCreateInfo createInfo = {};
+			createInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+			createInfo.renderPass = m_renderPass;
+			createInfo.attachmentCount = 1;
+			createInfo.pAttachments = attachments;
+			createInfo.width = m_swapchainExtent.width;
+			createInfo.height = m_swapchainExtent.height;
+			createInfo.layers = 1;
+
+			if (vkCreateFramebuffer(m_logicalDevice, &createInfo, nullptr, &m_swapchainFramebuffers[i]) != VK_SUCCESS) {
+				throw std::runtime_error("ERROR: Failed to create swapchain framebuffer!");
+			}
+		}
+	}
+
+	/*
+	Creates command pool attached to one queue family
+	*/
+	void createCommandPool() {
+		QueueFamilyIndices queueFamilies = findQueueFamilies(m_physicalDevice);
+
+		VkCommandPoolCreateInfo createInfo = {};
+		createInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+		createInfo.queueFamilyIndex = queueFamilies.graphicsFamily;
+
+		if (vkCreateCommandPool(m_logicalDevice, &createInfo, nullptr, &m_commandPool) != VK_SUCCESS) {
+			throw std::runtime_error("ERROR: Failed to create command pool!");
+		}
+	}
+
+	/*
+	Creates command buffers and records commands
+	*/
+	void createCommandBuffers() {
+		m_commandBuffers.resize(m_swapchainImageViews.size());
+
+		VkCommandBufferAllocateInfo allocInfo = {};
+		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+		allocInfo.commandPool = m_commandPool;
+		/*
+		VK_COMMAND_BUFFER_LEVEL_PRIMARY: Can be submitted to a queue for execution, but cannot be called from other command buffers.
+		VK_COMMAND_BUFFER_LEVEL_SECONDARY: Cannot be submitted directly, but can be called from primary command buffers.
+		*/
+		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		allocInfo.commandBufferCount = (uint32_t)m_commandBuffers.size();
+
+		if (vkAllocateCommandBuffers(m_logicalDevice, &allocInfo, m_commandBuffers.data()) != VK_SUCCESS) {
+			throw std::runtime_error("ERROR: Failed to allocate command buffers!");
 		}
 
-		return shaderModule;
+		for (size_t i = 0; i < m_commandBuffers.size(); i++) {
+			VkCommandBufferBeginInfo beginInfo = {};
+			beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+			beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+			beginInfo.pInheritanceInfo = nullptr;
+
+			vkBeginCommandBuffer(m_commandBuffers[i], &beginInfo);
+
+			VkRenderPassBeginInfo renderPassInfo = {};
+			renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+			renderPassInfo.renderPass = m_renderPass;
+			renderPassInfo.framebuffer = m_swapchainFramebuffers[i];
+			//render area defines where shader loads and stores will take place, should match size of attachments
+			renderPassInfo.renderArea.offset = { 0, 0 };
+			renderPassInfo.renderArea.extent = m_swapchainExtent;
+			
+			VkClearValue clearColor = { 0.2f, 0.3f, 0.3f, 1.0f };
+			renderPassInfo.pClearValues = &clearColor;
+			renderPassInfo.clearValueCount = 1;
+
+			/*
+			Begin recording commands
+			*/
+			vkCmdBeginRenderPass(m_commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+			vkCmdBindPipeline(m_commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipeline);
+			/*
+			vertexCount: Even though we don't have a vertex buffer, we technically still have 3 vertices to draw.
+			instanceCount: Used for instanced rendering, use 1 if you're not doing that.
+			firstVertex: Used as an offset into the vertex buffer, defines the lowest value of gl_VertexIndex.
+			firstInstance: Used as an offset for instanced rendering, defines the lowest value of gl_InstanceIndex.
+			*/
+			vkCmdDraw(m_commandBuffers[i], 3, 1, 0, 0);
+
+			vkCmdEndRenderPass(m_commandBuffers[i]);
+
+			if (vkEndCommandBuffer(m_commandBuffers[i]) != VK_SUCCESS) {
+				throw std::runtime_error("ERROR: Failed to record command buffer!");
+			}
+		}
 	}
+
+	void createSemaphores() {
+		VkSemaphoreCreateInfo createInfo = {};
+		createInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+		if (vkCreateSemaphore(m_logicalDevice, &createInfo, nullptr, &m_imageAvailableSemaphore) != VK_SUCCESS ||
+			vkCreateSemaphore(m_logicalDevice, &createInfo, nullptr, &m_renderFinishedSemaphore) != VK_SUCCESS) {
+			throw std::runtime_error("ERROR: Failed to create semaphores!");
+		}
+	}
+
+	void drawFrame() {
+		/*
+		Here should be update for program state
+		updateState()
+		*/
+		vkQueueWaitIdle(m_presentQueue); //wait for presentation to finish before drawing again
+
+		uint32_t imageIndex;
+		vkAcquireNextImageKHR(m_logicalDevice,
+			m_swapchain,
+			std::numeric_limits<uint64_t>::max(), //disables timeout
+			m_imageAvailableSemaphore,
+			VK_NULL_HANDLE,
+			&imageIndex);
+
+		VkSubmitInfo submitInfo = {};
+		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+		/*
+		We want to wait with writing colors into framebuffer until it's ready
+		Theoretically we can start executing vertex stage and such before imag is available
+		*/
+		VkSemaphore waitSemaphore[] = { m_imageAvailableSemaphore };
+		VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+		submitInfo.waitSemaphoreCount = 1;
+		submitInfo.pWaitSemaphores = waitSemaphore;
+		submitInfo.pWaitDstStageMask = waitStages;
+		submitInfo.commandBufferCount = 1;
+		submitInfo.pCommandBuffers = &m_commandBuffers[imageIndex];
+
+		VkSemaphore signalSemaphores[] = { m_renderFinishedSemaphore };
+		submitInfo.signalSemaphoreCount = 1;
+		submitInfo.pSignalSemaphores = signalSemaphores;
+
+		if (vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS) {
+			throw std::runtime_error("ERROR: Failed to submit draw command buffer!");
+		}
+
+		VkPresentInfoKHR presentInfo = {};
+		presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+		presentInfo.waitSemaphoreCount = 1;
+		presentInfo.pWaitSemaphores = signalSemaphores;
+
+		VkSwapchainKHR swapchains[] = { m_swapchain };
+		presentInfo.swapchainCount = 1;
+		presentInfo.pSwapchains = swapchains;
+		presentInfo.pImageIndices = &imageIndex;
+
+		vkQueuePresentKHR(m_presentQueue, &presentInfo);
+	}
+ 
 /*
 Members
 */
 public:
 private:
-	GLFWwindow*					m_window;
-	VkInstance					m_instance;
-	VkSurfaceKHR				m_surface;
-	VkDebugReportCallbackEXT	m_debugCallback;
-	VkPhysicalDevice			m_physicalDevice = VK_NULL_HANDLE; //Destroyed when instance is destroyed
-	VkDevice					m_logicalDevice;
-	VkQueue						m_graphicsQueue;
-	VkQueue						m_presentQueue;
-	VkSwapchainKHR				m_swapchain;
-	std::vector<VkImage>		m_swapchainImages;
-	VkFormat					m_swapchainImageFormat;
-	VkExtent2D					m_swapchainExtent;
-	std::vector<VkImageView>	m_swapchainImageViews;
-	VkRenderPass				m_renderPass;
-	VkPipelineLayout			m_pipelineLayout;
+	GLFWwindow*						m_window;
+	VkInstance						m_instance;
+	VkSurfaceKHR					m_surface;
+	VkDebugReportCallbackEXT		m_debugCallback;
+	VkPhysicalDevice				m_physicalDevice = VK_NULL_HANDLE; //Destroyed when instance is destroyed
+	VkDevice						m_logicalDevice;
+	VkQueue							m_graphicsQueue;
+	VkQueue							m_presentQueue;
+	VkSwapchainKHR					m_swapchain;
+	std::vector<VkImage>			m_swapchainImages;
+	VkFormat						m_swapchainImageFormat;
+	VkExtent2D						m_swapchainExtent;
+	std::vector<VkImageView>		m_swapchainImageViews;
+	VkRenderPass					m_renderPass;
+	VkPipelineLayout				m_pipelineLayout;
+	VkPipeline						m_graphicsPipeline;
+	std::vector<VkFramebuffer>		m_swapchainFramebuffers;
+	VkCommandPool					m_commandPool;
+	std::vector<VkCommandBuffer>	m_commandBuffers;
+	VkSemaphore						m_imageAvailableSemaphore;
+	VkSemaphore						m_renderFinishedSemaphore;
 };
 
 
