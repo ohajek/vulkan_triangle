@@ -9,17 +9,17 @@
 #include <algorithm>
 #include <fstream>
 
-#ifdef NDEBUG
-const bool enableValidationLayers = false;
-#else
+#ifdef _DEBUG
 const bool enableValidationLayers = true;
+#else
+const bool enableValidationLayers = false;
 #endif
 
 const unsigned int WIDTH = 800;
 const unsigned int HEIGHT = 600;
 
 /*
-Totalne ukradene proxy funkce na ziskani a niceni extension funkce pro debug vypisy
+Proxy function for creating and destroying extension function for debug messages
 */
 VkResult CreateDebugReportCallbackEXT(VkInstance instance, const VkDebugReportCallbackCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugReportCallbackEXT* pCallback) {
 	auto func = (PFN_vkCreateDebugReportCallbackEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugReportCallbackEXT");
@@ -71,8 +71,8 @@ const std::vector<const char*> deviceExtensions = {
 };
 
 /*
-Struktura pro ulozeni indexu jednotlivych queue families.
-isComplete overi, jestli jsou pritomny vsechny hledane families
+Struct to hold indices of queue families.
+isComplete checks, if all families are present
 */
 struct QueueFamilyIndices {
 	int graphicsFamily = -1;
@@ -138,6 +138,7 @@ private:
 		createLogicalDevice();
 		createSwapchain();
 		createImageViews();
+		createRenderPass();
 		createGraphicsPipeline();
 	}
 
@@ -152,6 +153,7 @@ private:
 	void cleanup() {
 		//Vulkan cleanup
 		vkDestroyPipelineLayout(m_logicalDevice, m_pipelineLayout, nullptr);
+		vkDestroyRenderPass(m_logicalDevice, m_renderPass, nullptr);
 		for (auto imageview : m_swapchainImageViews) {
 			vkDestroyImageView(m_logicalDevice, imageview, nullptr);
 		}
@@ -168,14 +170,14 @@ private:
 
 	void createInstance() {
 		/*
-		Kontrola na podporu zadanych validacnich vrstev pred samotnym vytvorenim
+		Checking for support of given validation layers before instance creation
 		*/
 		if (enableValidationLayers && !checkValidationLayerSupport()) {
 			throw std::runtime_error("ERROR:Validation layers requested, but not available!");
 		}
 
 		/*
-		Technicky nepovinna struktura popisujici program, kterou verzi Vulkanu pouziva, jaky engine atd.
+		Technically optional struct to describe program, which Vulkan version it uses, engine name etc.
 		*/
 		VkApplicationInfo programInfo = {};
 		programInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -186,15 +188,15 @@ private:
 		programInfo.apiVersion = VK_API_VERSION_1_0;
 
 		/*
-		Tato struktura uz nepovinna neni a rika Vulkan ovladaci, jake extensiony/validacni vrstvy pouzit
-		a pro ktera zarizeni (nebo pro cely program)
+		This struct is mandatory and tells Vulkan driver which extensions/validation layers to use
+		and for which devices (or whole program)
 		*/
 		VkInstanceCreateInfo createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 		createInfo.pApplicationInfo = &programInfo;
 
 		/*
-		Ziskani rozsireni z window systemu (Vulkan je platform agnostic)
+		Here we get extensions from used window system (Vulkan is platform agnostic)
 		*/
 		uint32_t glfwExtensionCount = 0;
 		const char** glfwExtensions;
@@ -207,7 +209,7 @@ private:
 		createInfo.enabledLayerCount = 0;
 
 		/*
-		Pridani validacnich vrstev do instance
+		Adding validation layers into the instance
 		*/
 		if (enableValidationLayers) {
 			createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
@@ -218,7 +220,7 @@ private:
 		}
 
 		/*
-		Vytvoreni samotne Vulkan instance
+		Vulkan instance creation
 		*/
 		VkResult result = vkCreateInstance(&createInfo, nullptr, &m_instance);
 		if (vkCreateInstance(&createInfo, nullptr, &m_instance) != VK_SUCCESS) {
@@ -228,8 +230,7 @@ private:
 
 	bool checkValidationLayerSupport() {
 		/*
-		Nejprve je potreba ziskat veskere validacni vrstvy
-		-> stejne pouziti jako u VkEnumerateInstanceExtensionProperties u VkInstance
+		First we need to get all of validation layers
 		*/
 		uint32_t layerCount = 0;
 		vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
@@ -238,8 +239,8 @@ private:
 		vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
 
 		/*
-		Nyni se overi, jestli veskere zadane val. vrstvy existuji
-		v podporovanych vrstvach
+		Now we check if all of given validation layers
+		are in supported validation layers
 		*/
 		for (const char* layerName : validationLayers) {
 			bool layerFound = false;
@@ -264,11 +265,10 @@ private:
 			return;
 		}
 		/*
-		Opet, jako s kazdym Vulkan objektem ,je potreba naplnit info struct
-		flags urcuji, ktere zpravy chceme ziskavat
-		pfncallback urcuje callback funkci
-		Da se pouzit i pUserData parametr pro predani do callback funkce
-		ziskatelni pres userData argument (naprikald poslat si cely program objekt)
+		Again as with any other Vulkan object we fill info struct
+		Flags say which messages we want to receive
+		pUserData can be used to transfer use data into the callback function
+		(rg. send a whole program object)
 		*/
 		VkDebugReportCallbackCreateInfoEXT createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT;
@@ -276,16 +276,17 @@ private:
 		createInfo.pfnCallback = debugCallback;
 
 		/*
-		Protoze je debug callback je specificky pro Vulkan instanci a jejim vrstvam,
-		je potreba ji zadat jako prvni
+		Because debug callback is specific for the whole Vulkan instance and it's layers,
+		we need to set it first
 		*/
 		if (CreateDebugReportCallbackEXT(m_instance, &createInfo, nullptr, &m_debugCallback) != VK_SUCCESS) {
-			throw std::runtime_error("ERROR:Failed to set up debug callback!");
+			throw std::runtime_error("ERROR: Failed to set up debug callback!");
 		}
 	}
 
 	/*
-	VKAPI_ATTR a VKAPI_CALL zarucuji, ze maji spravnou Vulkan signaturu
+	Debug callback function that reports messages from validation layers
+	VKAPI_ATTR and VKAPI_CALL guarantee the right Vulkan signature for the func.
 	flags
 		VK_DEBUG_REPORT_INFORMATION_BIT_EXT
 		VK_DEBUG_REPORT_WARNING_BIT_EXT
@@ -293,8 +294,8 @@ private:
 		VK_DEBUG_REPORT_ERROR_BIT_EXT
 		VK_DEBUG_REPORT_DEBUG_BIT_EXT
 
-	Vraci boolean: true pokud by se mela abortnout Vulkan call ktery
-	vyvolal validacni vrstvu (vhodne pro testovani) jinak vzdy vracet VK_FALSE
+	Returns boolean: true if we want to abort whole Vulkan call, which
+	set off the validation layer (good for testing) otherwise return VK_FALSE
 	*/
 	static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
 		VkDebugReportFlagsEXT flags,
@@ -312,9 +313,9 @@ private:
 	}
 
 	/*
-	Vraci seznam rozsireni podle zadanych validacnich vrstev
-	GLFW rozsireni jsou potreba vzdy ale DEBUG REPORT je pridan
-	jen pokud jsou zapnute validacni vrstvy
+	Returns vector of extensions
+	GLFW extensions are needed but DEBUG REPORT is added
+	if validation layers are on
 	*/
 	std::vector<const char*> getRequiredExtensions() {
 		uint32_t glfwExtensionCount = 0;
@@ -330,12 +331,19 @@ private:
 		return extensions;
 	}
 
+	/*
+	Creates window surface
+	*/
 	void createSurface() {
 		if (glfwCreateWindowSurface(m_instance, m_window, nullptr, &m_surface) != VK_SUCCESS) {
 			throw std::runtime_error("ERROR: Failed to create window surface!");
 		}
 	}
 
+	/*
+	Selects physical device from all available
+	devices based on it's "suitability"
+	*/
 	void selectPhysicalDevice() {
 		uint32_t deviceCount = 0;
 		vkEnumeratePhysicalDevices(m_instance, &deviceCount, nullptr);
@@ -423,7 +431,7 @@ private:
 		vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
 
 		/*
-		Do indices se ulozi indexy jednotlivych hledanych queues
+		Indices hold indices of searched queues
 		*/
 		int i = 0;
 		for (const auto& queueFamily : queueFamilies) {
@@ -433,9 +441,9 @@ private:
 			}
 
 			/*
-			Hledani podpory pro presentovani do surface -> je potreba hledat oddelene
-			Dala by se dat podminka pro uprednostneni zarizeni, ktere podporuje jak kresleni
-			tak presentation na stejne fronte pro lepsi performance
+			Searching for support for presenting into the surface -> it's required to search separately
+			It is possible to prioritize device which supports presenting and rendering on the same queue
+			for better performance
 			*/
 			VkBool32 presentSupport = false;
 			vkGetPhysicalDeviceSurfaceSupportKHR(device, i, m_surface, &presentSupport);
@@ -553,15 +561,14 @@ private:
 		}
 	}
 
-
 	void createLogicalDevice() {
 		QueueFamilyIndices indices = findQueueFamilies(m_physicalDevice);
 
 		/*
-		Drivery zatim podporuji vytvoreni maleho poctu front
-		ale neni moc potreba tvorit vice jak jednu -> command buffery se 
-		vytvori na vice threadech a poslou naraz jednim volanim do
-		main fronty s malym overheadem
+		Drivers so far support creation of a small number of queues
+		but there is no need to need more than one -> command buffers
+		are created on multiple threads and sent at once with one call
+		into the main queue with small overhead
 		*/
 		std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
 		std::set<int> uniqueQueueFamilies = { indices.graphicsFamily, indices.presentFamily };
@@ -575,11 +582,11 @@ private:
 			queueCreateInfos.push_back(queueCreateInfo);
 		}
 
-		//Specifikace device feature ktere se budou pouzivat (napr. geometry shader)
+		//Specification of used device features eg. geometry shader
 		VkPhysicalDeviceFeatures deviceFeatures = {};
 
 		/*
-		Hlavni create info
+		Main create info
 		*/
 		VkDeviceCreateInfo createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -601,13 +608,13 @@ private:
 			throw std::runtime_error("ERROR: Failed to create logical device!");
 		}
 
-		//Ziskani handlu na vytvorene fronty
+		//Handles for created queue
 		vkGetDeviceQueue(m_logicalDevice, indices.graphicsFamily, 0, &m_graphicsQueue);
 		vkGetDeviceQueue(m_logicalDevice, indices.presentFamily, 0, &m_presentQueue);
 	}
 
 	/*
-	Creating swapchain based on the info from SwapChainSupportDetails
+	Creates swapchain based on the info from SwapChainSupportDetails
 	*/
 	void createSwapchain() {
 		SwapchainSupportDetails swapchainDetails = querySwapchainSupport(m_physicalDevice);
@@ -705,6 +712,64 @@ private:
 			if (vkCreateImageView(m_logicalDevice, &createInfo, nullptr, &m_swapchainImageViews[i]) != VK_SUCCESS) {
 				throw std::runtime_error("ERROR: Failed to create imageview for swapchain!");
 			}
+		}
+	}
+
+	/*
+	Specifies framebuffer attachments used for rendring.
+	How many color, depth buffers will be used, how many
+	samples are used for each of them and how they should be
+	handled throughout the operations
+	*/
+	void createRenderPass() {
+		VkAttachmentDescription colorAttachment = {};
+		colorAttachment.format = m_swapchainImageFormat;
+		colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT; //multisampling
+		/*
+		loadOp and storeOp determine what to do with the data in the attachment
+		before and after rendering:
+		VK_ATTACHMENT_LOAD_OP_LOAD: Preserve the existing contents of the attachment
+		VK_ATTACHMENT_LOAD_OP_CLEAR: Clear the values to a constant at the start
+		VK_ATTACHMENT_LOAD_OP_DONT_CARE: Existing contents are undefined; we don't care about them
+
+		VK_ATTACHMENT_STORE_OP_STORE: Rendered contents will be stored in memory and can be read later
+		VK_ATTACHMENT_STORE_OP_DONT_CARE: Contents of the framebuffer will be undefined after the rendering operation
+		*/
+		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		/*
+		Sets layout of pixels in memory. We first dont care for how pixels
+		are stored since we will clear them to black and after renderpass
+		finishes, we want to transition into finalLayout
+		*/
+		colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+		/*
+		Subpasses
+		The index of the attachment in this array is directly referenced from
+		the fragment shader with the layout(location = 0) out vec4 outColor directive
+		*/
+		VkAttachmentReference colorAttachmentRef = {};
+		colorAttachmentRef.attachment = 0; //We have just one attachment description
+		colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+		VkSubpassDescription subpass = {};
+		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpass.colorAttachmentCount = 1;
+		subpass.pColorAttachments = &colorAttachmentRef;
+
+		VkRenderPassCreateInfo createInfo = {};
+		createInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+		createInfo.attachmentCount = 1;
+		createInfo.pAttachments = &colorAttachment;
+		createInfo.subpassCount = 1;
+		createInfo.pSubpasses = &subpass;
+
+		if (vkCreateRenderPass(m_logicalDevice, &createInfo, nullptr, &m_renderPass) != VK_SUCCESS) {
+			throw std::runtime_error("ERROR: Failed to create render pass!");
 		}
 	}
 
@@ -896,7 +961,7 @@ private:
 	VkInstance					m_instance;
 	VkSurfaceKHR				m_surface;
 	VkDebugReportCallbackEXT	m_debugCallback;
-	VkPhysicalDevice			m_physicalDevice = VK_NULL_HANDLE; //Implicitne znicen pri niceni instance -> neni potreba uvolnit
+	VkPhysicalDevice			m_physicalDevice = VK_NULL_HANDLE; //Destroyed when instance is destroyed
 	VkDevice					m_logicalDevice;
 	VkQueue						m_graphicsQueue;
 	VkQueue						m_presentQueue;
@@ -905,6 +970,7 @@ private:
 	VkFormat					m_swapchainImageFormat;
 	VkExtent2D					m_swapchainExtent;
 	std::vector<VkImageView>	m_swapchainImageViews;
+	VkRenderPass				m_renderPass;
 	VkPipelineLayout			m_pipelineLayout;
 };
 
