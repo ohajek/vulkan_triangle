@@ -9,6 +9,10 @@
 #include <algorithm>
 #include <fstream>
 
+#include <glm/glm.hpp>
+
+#include "math.hpp"
+
 #ifdef _DEBUG
 const bool enableValidationLayers = true;
 #else
@@ -142,6 +146,7 @@ private:
 		createGraphicsPipeline();
 		createFramebuffers();
 		createCommandPool();
+		createVertexBuffer();
 		createCommandBuffers();
 		createSemaphores();
 	}
@@ -170,6 +175,8 @@ private:
 			vkDestroyImageView(m_logicalDevice, imageview, nullptr);
 		}
 		vkDestroySwapchainKHR(m_logicalDevice, m_swapchain, nullptr);
+		vkDestroyBuffer(m_logicalDevice, m_vertexBuffer, nullptr);
+		vkFreeMemory(m_logicalDevice, m_vertexBufferMemory, nullptr);
 		vkDestroyDevice(m_logicalDevice, nullptr);
 		DestroyDebugReportCallbackEXT(m_instance, m_debugCallback, nullptr);
 		vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
@@ -854,12 +861,14 @@ private:
 		Attribute descriptions:
 			type of attributes passed into the vertex shader, binding and offset
 		*/
+		auto bindingDescription = Vertex::getBindingDescription();
+		auto attributeDescriptions = Vertex::getAttributeDescriptions();
 		VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
 		vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-		vertexInputInfo.vertexBindingDescriptionCount = 0;
-		vertexInputInfo.pVertexBindingDescriptions = nullptr; // Optional
-		vertexInputInfo.vertexAttributeDescriptionCount = 0;
-		vertexInputInfo.pVertexAttributeDescriptions = nullptr; // Optional
+		vertexInputInfo.vertexBindingDescriptionCount = 1;
+		vertexInputInfo.pVertexBindingDescriptions = &bindingDescription; // Optional, can be nullptr
+		vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+		vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data(); // Optional, can be nullptr
 
 		/*
 		Input assembly describes, what kind of geometry will be drawn and if primitive restart is enables.
@@ -1085,7 +1094,11 @@ private:
 			firstVertex: Used as an offset into the vertex buffer, defines the lowest value of gl_VertexIndex.
 			firstInstance: Used as an offset for instanced rendering, defines the lowest value of gl_InstanceIndex.
 			*/
-			vkCmdDraw(m_commandBuffers[i], 3, 1, 0, 0);
+			VkBuffer vertexBuffers[] = { m_vertexBuffer };
+			VkDeviceSize offsets[] = { 0 };
+			vkCmdBindVertexBuffers(m_commandBuffers[i], 0, 1, vertexBuffers, offsets);
+
+			vkCmdDraw(m_commandBuffers[i], static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 
 			vkCmdEndRenderPass(m_commandBuffers[i]);
 
@@ -1155,6 +1168,65 @@ private:
 
 		vkQueuePresentKHR(m_presentQueue, &presentInfo);
 	}
+
+	uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+		VkPhysicalDeviceMemoryProperties memProperties;
+		vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProperties);
+
+		/*
+		If there is a memory type suitable for the buffer that also has
+		all of the properties we need, then we return its index
+		*/
+		for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+			if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+				return i;
+			}
+		}
+
+		throw std::runtime_error("failed to find suitable memory type!");
+	}
+
+	void createVertexBuffer() {
+		VkBufferCreateInfo bufferInfo = {};
+		bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		bufferInfo.size = sizeof(vertices[0]) * vertices.size();
+		bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		bufferInfo.flags = 0;
+
+		if (vkCreateBuffer(m_logicalDevice, &bufferInfo, nullptr, &m_vertexBuffer) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create vertex buffer!");
+		}
+
+		//Buffer is created, now we need to allocate memory for it
+		VkMemoryRequirements memRequirements;
+		vkGetBufferMemoryRequirements(m_logicalDevice, m_vertexBuffer, &memRequirements);
+
+		VkMemoryAllocateInfo allocInfo = {};
+		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		allocInfo.allocationSize = memRequirements.size;
+		allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+		if (vkAllocateMemory(m_logicalDevice, &allocInfo, nullptr, &m_vertexBufferMemory) != VK_SUCCESS) {
+			throw std::runtime_error("failed to allocate vertex buffer memory!");
+		}
+
+		//If allocation was succ., we can bind it to buffer
+		vkBindBufferMemory(m_logicalDevice, m_vertexBuffer, m_vertexBufferMemory, 0); //0 - offset in memory
+
+		//Copy vertex data into buffer
+		void* data;
+		vkMapMemory(m_logicalDevice, m_vertexBufferMemory, 0, bufferInfo.size, 0, &data);
+		memcpy(data, vertices.data(), (size_t)bufferInfo.size);
+		vkUnmapMemory(m_logicalDevice, m_vertexBufferMemory);
+
+		/*
+		It may happen that memory might not be copied when unmapping memory region -> solutions:
+			Use a memory heap that is host coherent, indicated with VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+			Call vkFlushMappedMemoryRanges to after writing to the mapped memory,
+			and call vkInvalidateMappedMemoryRanges before reading from the mapped memory
+		*/
+	}
  
 /*
 Members
@@ -1179,6 +1251,8 @@ private:
 	VkPipeline						m_graphicsPipeline;
 	std::vector<VkFramebuffer>		m_swapchainFramebuffers;
 	VkCommandPool					m_commandPool;
+	VkBuffer						m_vertexBuffer;
+	VkDeviceMemory					m_vertexBufferMemory;
 	std::vector<VkCommandBuffer>	m_commandBuffers;
 	VkSemaphore						m_imageAvailableSemaphore;
 	VkSemaphore						m_renderFinishedSemaphore;
