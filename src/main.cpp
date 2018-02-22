@@ -19,10 +19,17 @@ const bool enableValidationLayers = true;
 const bool enableValidationLayers = false;
 #endif
 
-unsigned int WIDTH = 1280;
-unsigned int HEIGHT = 720;
+const unsigned int WIDTH = 1280;
+const unsigned int HEIGHT = 720;
 
 class HelloTriangleApplication;
+
+
+const std::vector<Vertex> vertices = {
+	{ { 0.0f, -0.0f },{ 0.0f, 0.0f, 1.0f } },
+	{ { 0.5f, 0.5f },{ 1.0f, 1.0f, 0.0f } },
+	{ { -0.5f, 0.5f },{ 0.0f, 0.0f, 0.0f } }
+};
 
 /*
 Proxy function for creating and destroying extension function for debug messages
