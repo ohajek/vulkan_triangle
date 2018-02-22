@@ -25,12 +25,6 @@ const unsigned int HEIGHT = 720;
 class HelloTriangleApplication;
 
 
-const std::vector<Vertex> vertices = {
-	{ { 0.0f, -0.0f },{ 0.0f, 0.0f, 1.0f } },
-	{ { 0.5f, 0.5f },{ 1.0f, 1.0f, 0.0f } },
-	{ { -0.5f, 0.5f },{ 0.0f, 0.0f, 0.0f } }
-};
-
 /*
 Proxy function for creating and destroying extension function for debug messages
 */
@@ -186,6 +180,7 @@ private:
 		createFramebuffers();
 		createCommandPool();
 		createVertexBuffer();
+		createIndexBuffer();
 		createCommandBuffers();
 		createSemaphores();
 	}
@@ -210,6 +205,8 @@ private:
 
 		vkDestroyBuffer(m_logicalDevice, m_vertexBuffer, nullptr);
 		vkFreeMemory(m_logicalDevice, m_vertexBufferMemory, nullptr);
+		vkDestroyBuffer(m_logicalDevice, m_indexBuffer, nullptr);
+		vkFreeMemory(m_logicalDevice, m_indexBufferMemory, nullptr);
 
 		vkDestroyDevice(m_logicalDevice, nullptr);
 		DestroyDebugReportCallbackEXT(m_instance, m_debugCallback, nullptr);
@@ -1152,8 +1149,10 @@ private:
 			VkBuffer vertexBuffers[] = { m_vertexBuffer };
 			VkDeviceSize offsets[] = { 0 };
 			vkCmdBindVertexBuffers(m_commandBuffers[i], 0, 1, vertexBuffers, offsets);
+			vkCmdBindIndexBuffer(m_commandBuffers[i], m_indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
-			vkCmdDraw(m_commandBuffers[i], static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+			//vkCmdDraw(m_commandBuffers[i], static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+			vkCmdDrawIndexed(m_commandBuffers[i], static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
 			vkCmdEndRenderPass(m_commandBuffers[i]);
 
@@ -1255,46 +1254,141 @@ private:
 		throw std::runtime_error("failed to find suitable memory type!");
 	}
 
-	void createVertexBuffer() {
+	void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
 		VkBufferCreateInfo bufferInfo = {};
 		bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-		bufferInfo.size = sizeof(vertices[0]) * vertices.size();
-		bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+		bufferInfo.size = size;
+		bufferInfo.usage = usage;
 		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		bufferInfo.flags = 0;
+		//bufferInfo.flags = 0;
 
-		if (vkCreateBuffer(m_logicalDevice, &bufferInfo, nullptr, &m_vertexBuffer) != VK_SUCCESS) {
-			throw std::runtime_error("failed to create vertex buffer!");
+		if (vkCreateBuffer(m_logicalDevice, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
+			throw std::runtime_error("ERROR: failed to create vertex buffer!");
 		}
 
 		//Buffer is created, now we need to allocate memory for it
 		VkMemoryRequirements memRequirements;
-		vkGetBufferMemoryRequirements(m_logicalDevice, m_vertexBuffer, &memRequirements);
+		vkGetBufferMemoryRequirements(m_logicalDevice, buffer, &memRequirements);
 
 		VkMemoryAllocateInfo allocInfo = {};
 		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		allocInfo.allocationSize = memRequirements.size;
-		allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+		allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
 
-		if (vkAllocateMemory(m_logicalDevice, &allocInfo, nullptr, &m_vertexBufferMemory) != VK_SUCCESS) {
+		if (vkAllocateMemory(m_logicalDevice, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
 			throw std::runtime_error("failed to allocate vertex buffer memory!");
 		}
 
 		//If allocation was succ., we can bind it to buffer
-		vkBindBufferMemory(m_logicalDevice, m_vertexBuffer, m_vertexBufferMemory, 0); //0 - offset in memory
+		vkBindBufferMemory(m_logicalDevice, buffer, bufferMemory, 0); //0 - offset in memory
+	}
+
+	void createVertexBuffer() {
+		VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+
+		VkBuffer stagingBuffer;
+		VkDeviceMemory stagingBufferMemory;
+		createBuffer(
+			bufferSize,
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			stagingBuffer,
+			stagingBufferMemory);
 
 		//Copy vertex data into buffer
 		void* data;
-		vkMapMemory(m_logicalDevice, m_vertexBufferMemory, 0, bufferInfo.size, 0, &data);
-		memcpy(data, vertices.data(), (size_t)bufferInfo.size);
-		vkUnmapMemory(m_logicalDevice, m_vertexBufferMemory);
+		vkMapMemory(m_logicalDevice, stagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, vertices.data(), (size_t)bufferSize);
+		vkUnmapMemory(m_logicalDevice, stagingBufferMemory);
 
+		createBuffer(
+			bufferSize,
+			VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			m_vertexBuffer,
+			m_vertexBufferMemory);
 		/*
 		It may happen that memory might not be copied when unmapping memory region -> solutions:
 			Use a memory heap that is host coherent, indicated with VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
 			Call vkFlushMappedMemoryRanges to after writing to the mapped memory,
 			and call vkInvalidateMappedMemoryRanges before reading from the mapped memory
 		*/
+
+		copyBufferData(stagingBuffer, m_vertexBuffer, bufferSize);
+
+		vkDestroyBuffer(m_logicalDevice, stagingBuffer, nullptr);
+		vkFreeMemory(m_logicalDevice, stagingBufferMemory, nullptr);
+	}
+
+	void createIndexBuffer() {
+		VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+
+		VkBuffer stagingBuffer;
+		VkDeviceMemory stagingBufferMemory;
+		createBuffer(
+			bufferSize,
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			stagingBuffer,
+			stagingBufferMemory
+		);
+
+		void* data;
+		vkMapMemory(m_logicalDevice, stagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, indices.data(), (size_t)bufferSize);
+		vkUnmapMemory(m_logicalDevice, stagingBufferMemory);
+
+		createBuffer(
+			bufferSize,
+			VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			m_indexBuffer,
+			m_indexBufferMemory
+		);
+
+		copyBufferData(stagingBuffer, m_indexBuffer, bufferSize);
+
+		vkDestroyBuffer(m_logicalDevice, stagingBuffer, nullptr);
+		vkFreeMemory(m_logicalDevice, stagingBufferMemory, nullptr);
+	}
+
+	void copyBufferData(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
+		//You can create separate command pool for these buffers -> may apply memory optimization
+		VkCommandBufferAllocateInfo allocInfo = {};
+		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		allocInfo.commandPool = m_commandPool;
+		allocInfo.commandBufferCount = 1;
+
+		VkCommandBuffer commandBuffer;
+		vkAllocateCommandBuffers(m_logicalDevice, &allocInfo, &commandBuffer);
+
+		//Start recording command buffer
+		VkCommandBufferBeginInfo beginInfo = {};
+		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+		vkBeginCommandBuffer(commandBuffer, &beginInfo);
+			VkBufferCopy copyRegion = {};
+			copyRegion.srcOffset = 0; //optional
+			copyRegion.dstOffset = 0; //optional
+			copyRegion.size = size;
+			vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+		vkEndCommandBuffer(commandBuffer);
+
+		//Submit command
+		VkSubmitInfo submitInfo = {};
+		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		submitInfo.commandBufferCount = 1;
+		submitInfo.pCommandBuffers = &commandBuffer;
+
+		vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+		vkQueueWaitIdle(m_graphicsQueue); 
+		/*
+		here we wait for queue to be idle, it is possible to wait for
+		fences, which could be used for multiple transfer simultaneously
+		*/
+		vkFreeCommandBuffers(m_logicalDevice, m_commandPool, 1, &commandBuffer);
 	}
  
 /*
@@ -1322,6 +1416,8 @@ private:
 	VkCommandPool					m_commandPool;
 	VkBuffer						m_vertexBuffer;
 	VkDeviceMemory					m_vertexBufferMemory;
+	VkBuffer						m_indexBuffer;
+	VkDeviceMemory					m_indexBufferMemory;
 	std::vector<VkCommandBuffer>	m_commandBuffers;
 	VkSemaphore						m_imageAvailableSemaphore;
 	VkSemaphore						m_renderFinishedSemaphore;
