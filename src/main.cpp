@@ -67,7 +67,8 @@ static std::vector<char> readFile(const std::string &filename) {
 Required device validation layers
 */
 const std::vector<const char*> validationLayers = {
-	"VK_LAYER_LUNARG_standard_validation"
+	"VK_LAYER_LUNARG_standard_validation",
+	"VK_LAYER_LUNARG_assistant_layer"
 };
 
 /*
@@ -176,11 +177,15 @@ private:
 		createSwapchain();
 		createImageViews();
 		createRenderPass();
+		createDescriptorSetLayout();
 		createGraphicsPipeline();
 		createFramebuffers();
 		createCommandPool();
 		createVertexBuffer();
 		createIndexBuffer();
+		createUniformBuffer();
+		createDescriptorPool();
+		createDescriptorSet();
 		createCommandBuffers();
 		createSemaphores();
 	}
@@ -188,6 +193,9 @@ private:
 	void mainLoop() {
 		while (!glfwWindowShouldClose(m_window)) {
 			glfwPollEvents();
+
+			updateUniformData();
+
 			drawFrame();
 		}
 
@@ -201,12 +209,17 @@ private:
 
 		cleanupSwapchain();
 
+		vkDestroyDescriptorSetLayout(m_logicalDevice, m_descriptorSetLayout, nullptr);
+		vkDestroyDescriptorPool(m_logicalDevice, m_descriptorPool, nullptr);
+
 		vkDestroyCommandPool(m_logicalDevice, m_commandPool, nullptr);
 
 		vkDestroyBuffer(m_logicalDevice, m_vertexBuffer, nullptr);
 		vkFreeMemory(m_logicalDevice, m_vertexBufferMemory, nullptr);
 		vkDestroyBuffer(m_logicalDevice, m_indexBuffer, nullptr);
 		vkFreeMemory(m_logicalDevice, m_indexBufferMemory, nullptr);
+		vkDestroyBuffer(m_logicalDevice, m_uniformBuffer, nullptr);
+		vkFreeMemory(m_logicalDevice, m_uniformBufferMemory, nullptr);
 
 		vkDestroyDevice(m_logicalDevice, nullptr);
 		DestroyDebugReportCallbackEXT(m_instance, m_debugCallback, nullptr);
@@ -878,6 +891,24 @@ private:
 		return shaderModule;
 	}
 
+	void createDescriptorSetLayout() {
+		VkDescriptorSetLayoutBinding uboLayoutBinding = {};
+		uboLayoutBinding.binding = 0;
+		uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		uboLayoutBinding.descriptorCount = 1;
+		uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+		uboLayoutBinding.pImmutableSamplers = nullptr; //optional
+
+		VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		layoutInfo.bindingCount = 1;
+		layoutInfo.pBindings = &uboLayoutBinding;
+
+		if (vkCreateDescriptorSetLayout(m_logicalDevice, &layoutInfo, nullptr, &m_descriptorSetLayout)) {
+			throw std::runtime_error("ERROR: Failed to create descriptor set layout!");
+		}
+	}
+
 	void createGraphicsPipeline() {
 		/*
 		Programmable part
@@ -968,7 +999,7 @@ private:
 		rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
 		rasterizer.lineWidth = 1.0f;
 		rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-		rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+		rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 		rasterizer.depthBiasEnable = VK_FALSE;
 
 		/*
@@ -1019,8 +1050,8 @@ private:
 		*/
 		VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
 		pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-		pipelineLayoutInfo.setLayoutCount = 0;
-		pipelineLayoutInfo.pSetLayouts = nullptr;
+		pipelineLayoutInfo.setLayoutCount = 1;
+		pipelineLayoutInfo.pSetLayouts = &m_descriptorSetLayout;
 		pipelineLayoutInfo.pushConstantRangeCount = 0;
 		pipelineLayoutInfo.pPushConstantRanges = 0;
 
@@ -1150,6 +1181,7 @@ private:
 			VkDeviceSize offsets[] = { 0 };
 			vkCmdBindVertexBuffers(m_commandBuffers[i], 0, 1, vertexBuffers, offsets);
 			vkCmdBindIndexBuffer(m_commandBuffers[i], m_indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+			vkCmdBindDescriptorSets(m_commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
 
 			//vkCmdDraw(m_commandBuffers[i], static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 			vkCmdDrawIndexed(m_commandBuffers[i], static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
@@ -1352,6 +1384,16 @@ private:
 		vkFreeMemory(m_logicalDevice, stagingBufferMemory, nullptr);
 	}
 
+	void createUniformBuffer() {
+		VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+		createBuffer(
+			bufferSize,
+			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			m_uniformBuffer,
+			m_uniformBufferMemory);
+	}
+
 	void copyBufferData(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
 		//You can create separate command pool for these buffers -> may apply memory optimization
 		VkCommandBufferAllocateInfo allocInfo = {};
@@ -1391,6 +1433,79 @@ private:
 		vkFreeCommandBuffers(m_logicalDevice, m_commandPool, 1, &commandBuffer);
 	}
  
+	void updateUniformData() {
+		static auto timeStart = std::chrono::high_resolution_clock::now();
+
+		auto timeCurrent = std::chrono::high_resolution_clock::now();
+		float time = std::chrono::duration<float, std::chrono::seconds::period>(timeCurrent - timeStart).count();
+
+		UniformBufferObject ubo = {};
+		ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubo.projection = glm::perspective(glm::radians(45.0f), m_swapchainExtent.width / (float) m_swapchainExtent.height, 0.1f, 10.0f);
+		ubo.projection[1][1] *= -1; //flipping Y coordinate
+
+		void* data;
+		vkMapMemory(m_logicalDevice, m_uniformBufferMemory, 0, sizeof(ubo), 0, &data);
+			memcpy(data, &ubo, sizeof(ubo));
+		vkUnmapMemory(m_logicalDevice, m_uniformBufferMemory);
+	}
+
+	/*
+	Descriptor sets must be created, like command buffers, from Descriptor pools
+	*/
+	void createDescriptorPool() {
+		/*
+		First specify descriptor types which descriptor set will contain
+		*/
+		VkDescriptorPoolSize poolSize = {};
+		poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		poolSize.descriptorCount = 1;
+
+		VkDescriptorPoolCreateInfo poolInfo = {};
+		poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+		poolInfo.poolSizeCount = 1;
+		poolInfo.pPoolSizes = &poolSize;
+		poolInfo.maxSets = 1;
+
+		if (vkCreateDescriptorPool(m_logicalDevice, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
+			throw std::runtime_error("ERROR: Failed to create descriptor set pool!");
+		}
+	}
+
+	void createDescriptorSet() {
+		VkDescriptorSetLayout layouts[] = {m_descriptorSetLayout};
+		VkDescriptorSetAllocateInfo allocInfo = {};
+		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		allocInfo.descriptorPool = m_descriptorPool;
+		allocInfo.descriptorSetCount = 1;
+		allocInfo.pSetLayouts = layouts;
+
+		//No need for cleanup, freed with descriptor pool
+		if (vkAllocateDescriptorSets(m_logicalDevice, &allocInfo, &m_descriptorSet) != VK_SUCCESS) {
+			throw std::runtime_error("ERROR: Failed to allocate descriptor set!");
+		}
+
+		/*
+		Descriptor set is now allocated but descriptors within still need to be configured
+		*/
+		VkDescriptorBufferInfo bufferInfo = {};
+		bufferInfo.buffer = m_uniformBuffer;
+		bufferInfo.offset = 0;
+		bufferInfo.range = sizeof(UniformBufferObject);
+
+		VkWriteDescriptorSet descriptorWrite = {};
+		descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrite.dstSet = m_descriptorSet;
+		descriptorWrite.dstBinding = 0;
+		descriptorWrite.dstArrayElement = 0;
+		descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		descriptorWrite.descriptorCount = 1; //How many and what types of array elements to update
+		descriptorWrite.pBufferInfo = &bufferInfo;
+
+		vkUpdateDescriptorSets(m_logicalDevice, 1, &descriptorWrite, 0, nullptr);
+	}
+
 /*
 Members
 */
@@ -1410,6 +1525,9 @@ private:
 	VkExtent2D						m_swapchainExtent;
 	std::vector<VkImageView>		m_swapchainImageViews;
 	VkRenderPass					m_renderPass;
+	VkDescriptorSetLayout			m_descriptorSetLayout;
+	VkDescriptorPool				m_descriptorPool;
+	VkDescriptorSet					m_descriptorSet;
 	VkPipelineLayout				m_pipelineLayout;
 	VkPipeline						m_graphicsPipeline;
 	std::vector<VkFramebuffer>		m_swapchainFramebuffers;
@@ -1418,6 +1536,8 @@ private:
 	VkDeviceMemory					m_vertexBufferMemory;
 	VkBuffer						m_indexBuffer;
 	VkDeviceMemory					m_indexBufferMemory;
+	VkBuffer						m_uniformBuffer;
+	VkDeviceMemory					m_uniformBufferMemory;
 	std::vector<VkCommandBuffer>	m_commandBuffers;
 	VkSemaphore						m_imageAvailableSemaphore;
 	VkSemaphore						m_renderFinishedSemaphore;

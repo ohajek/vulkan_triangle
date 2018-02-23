@@ -4,6 +4,11 @@
 #include <array>
 #include <glm/glm.hpp>
 
+#define GLM_FORCE_RADIANS
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <chrono>
 struct Vertex {
 	glm::vec2 position;
 	glm::vec3 color;
@@ -58,4 +63,10 @@ const std::vector<Vertex> vertices = {
 
 const std::vector<uint16_t> indices = {
 	0, 1, 2, 2, 3, 0
+};
+
+struct UniformBufferObject {
+	glm::mat4 model;
+	glm::mat4 view;
+	glm::mat4 projection;
 };
