@@ -24,6 +24,10 @@
   <ItemGroup>
     <ClInclude Include="..\..\..\src\math.hpp" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\..\shaders\triangle.frag" />
+    <None Include="..\..\..\shaders\triangle.vert" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>15.0</VCProjectVersion>
     <ProjectGuid>{f5f7eae4-2b28-4dff-b049-6e4bd34d4280}</ProjectGuid>

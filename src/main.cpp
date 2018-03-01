@@ -310,6 +310,7 @@ private:
 
 			for (const auto& layerProperties : availableLayers) {
 				if (strcmp(layerName, layerProperties.layerName) == 0) {
+					std::cout << "Layer: " << layerName << " found." << std::endl;
 					layerFound = true;
 					break;
 				}
@@ -476,6 +477,7 @@ private:
 
 		//For each required extensions present, erase it from the set
 		for (const auto &extension : availableExtensions) {
+			std::cout << "Avail. Extension: " << extension.extensionName << std::endl;
 			requiredExtensions.erase(extension.extensionName);
 		}
 
@@ -999,7 +1001,7 @@ private:
 		rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
 		rasterizer.lineWidth = 1.0f;
 		rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-		rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+		rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
 		rasterizer.depthBiasEnable = VK_FALSE;
 
 		/*
@@ -1440,10 +1442,9 @@ private:
 		float time = std::chrono::duration<float, std::chrono::seconds::period>(timeCurrent - timeStart).count();
 
 		UniformBufferObject ubo = {};
-		ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-		ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-		ubo.projection = glm::perspective(glm::radians(45.0f), m_swapchainExtent.width / (float) m_swapchainExtent.height, 0.1f, 10.0f);
-		ubo.projection[1][1] *= -1; //flipping Y coordinate
+		//ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		//ubo.view = glm::lookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, -1.0f, 0.0f));
+		//ubo.projection = glm::perspective(glm::radians(90.0f), m_swapchainExtent.width / (float) m_swapchainExtent.height, 0.1f, 1000.0f);
 
 		void* data;
 		vkMapMemory(m_logicalDevice, m_uniformBufferMemory, 0, sizeof(ubo), 0, &data);
