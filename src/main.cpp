@@ -915,8 +915,14 @@ private:
 		/*
 		Programmable part
 		*/
-		auto vertShaderCode = readFile("shaders/triangle.vert.spv");
-		auto fragShaderCode = readFile("shaders/triangle.frag.spv");
+		
+#ifdef _DEBUG
+		auto vertShaderCode = readFile("shaders/test.vert.spv");
+		auto fragShaderCode = readFile("shaders/test.frag.spv");
+#else
+		auto vertShaderCode = readFile("shaders/atmosphere.vert.spv");
+		auto fragShaderCode = readFile("shaders/atmosphere.frag.spv");
+#endif
 
 		VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
 		VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);

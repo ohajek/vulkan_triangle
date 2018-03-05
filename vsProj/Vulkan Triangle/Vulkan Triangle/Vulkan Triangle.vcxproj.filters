@@ -28,10 +28,16 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\..\..\shaders\triangle.frag">
+    <None Include="..\..\..\shaders\test.frag">
       <Filter>Shaders</Filter>
     </None>
-    <None Include="..\..\..\shaders\triangle.vert">
+    <None Include="..\..\..\shaders\test.vert">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="..\..\..\shaders\atmosphere.frag">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="..\..\..\shaders\atmosphere.vert">
       <Filter>Shaders</Filter>
     </None>
   </ItemGroup>
