@@ -1451,6 +1451,7 @@ private:
 		//ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 		//ubo.view = glm::lookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, -1.0f, 0.0f));
 		//ubo.projection = glm::perspective(glm::radians(90.0f), m_swapchainExtent.width / (float) m_swapchainExtent.height, 0.1f, 1000.0f);
+		ubo.time = time;
 
 		void* data;
 		vkMapMemory(m_logicalDevice, m_uniformBufferMemory, 0, sizeof(ubo), 0, &data);
